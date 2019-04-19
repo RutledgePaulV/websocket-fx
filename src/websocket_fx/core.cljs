@@ -128,7 +128,9 @@
   (fn [{:keys [db]} [_ socket-id subscription-id response]]
     (let [path [::sockets socket-id :subscriptions subscription-id]]
       (if-some [subscription (get-in db path)]
-        {:dispatch (conj (:on-message subscription) response)}
+        (if-some [on-message (:on-message subscription)]
+          {:dispatch (conj on-message response)}
+          {})
         {}))))
 
 (rf/reg-event-fx
@@ -172,18 +174,21 @@
 
 (rf/reg-fx
   ::connect
-  (fn [{:keys [socket-id options]}]
+  (fn [{socket-id
+        :socket-id
+        {:keys [url format on-connect on-disconnect]
+         :or   {format :edn
+                url    (websocket-url)}}
+        :options}]
     (async/go
-      (let [url        (or (get options :url) (websocket-url))
-            final-opts (-> options
-                           (dissoc :url)
-                           (update :format keyword->format))
-            {:keys [socket source sink close-status]}
-            (async/<! (haslett/connect url final-opts))
-            mult       (async/mult source)]
+      (let [{:keys [socket source sink close-status]}
+            (async/<! (haslett/connect url {:format (keyword->format format)}))
+            mult (async/mult source)]
         (async/go
           (when-some [closed (async/<! close-status)]
-            (rf/dispatch [::disconnected socket-id closed])))
+            (rf/dispatch [::disconnected socket-id closed])
+            (when (some? on-disconnect)
+              (rf/dispatch on-disconnect))))
         (when-not (async/poll! close-status)
           (let [sink-proxy (async/chan)]
             (async/go-loop []
@@ -194,11 +199,10 @@
                         response-chan (async/tap mult (async/chan 1 xform))
                         timeout-chan  (async/timeout timeout)]
                     (async/go
-                      (async/alts!
-                        timeout-chan
-                        ([event] (rf/dispatch [::request-failed socket-id id :timeout]))
-                        response-chan
-                        ([event] (rf/dispatch [::request-success socket-id id (:data event)])))))
+                      (let [[value _] (async/alts! [timeout-chan response-chan])]
+                        (if (some? value)
+                          (rf/dispatch [::request-success socket-id id (:data value)])
+                          (rf/dispatch [::request-failed socket-id id :timeout])))))
                   (#{:subscription} proto)
                   (let [xform         (filter (fn [msg] (= (:id msg) id)))
                         response-chan (async/tap mult (async/chan 1 xform))]
@@ -211,7 +215,9 @@
                         (async/>! sink {:id id :proto proto :data data}))
                   (recur))))
             (swap! CONNECTIONS assoc socket-id {:sink sink-proxy :source source :socket socket}))
-          (rf/dispatch [::connected socket-id]))))))
+          (rf/dispatch [::connected socket-id])
+          (when (some? on-connect)
+            (rf/dispatch on-connect)))))))
 
 (rf/reg-fx
   ::disconnect
