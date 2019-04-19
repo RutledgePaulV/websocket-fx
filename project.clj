@@ -1,4 +1,4 @@
-(defproject re-frame-websocket-fx "0.1.0-SNAPSHOT"
+(defproject org.clojars.rutledgepaulv/re-frame-websocket-fx "0.1.0-SNAPSHOT"
 
   :dependencies
   [[org.clojure/clojure "1.10.0"]

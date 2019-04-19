@@ -51,7 +51,7 @@
                 :status  :pending
                 :options command}]
       {:db       (assoc-in db [::sockets socket-id] data)
-       ::connect (assoc command :socket-id socket-id)})))
+       ::connect {:socket-id socket-id :options command}})))
 
 (rf/reg-event-fx
   ::disconnect
@@ -84,12 +84,12 @@
 
 (rf/reg-event-fx
   ::request
-  (fn [{:keys [db]} [_ socket-id {:keys [message] :as command}]]
+  (fn [{:keys [db]} [_ socket-id {:keys [message timeout on-success on-failure]}]]
     (let [payload {:id (random-uuid) :proto :request :data message}
           path    [::sockets socket-id :requests (get payload :id)]]
-      {:db         (assoc-in db path command)
+      {:db         (assoc-in db path {:message message :timeout timeout :on-success on-success :on-failure on-failure})
        :ws-message {:socket-id socket-id
-                    :message   payload}})))
+                    :message   (assoc payload :timeout timeout)}})))
 
 (rf/reg-event-fx
   ::request-success
@@ -172,20 +172,22 @@
 
 (rf/reg-fx
   ::connect
-  (fn [{:keys [socket-id url options]}]
+  (fn [{:keys [socket-id options]}]
     (async/go
-      (let [{:keys [socket source sink close-status]}
-            (async/<! (haslett/connect url options))
-            mult (async/mult source)]
+      (let [url        (or (get options :url) (websocket-url))
+            final-opts (-> options
+                           (dissoc :url)
+                           (update :format keyword->format))
+            {:keys [socket source sink close-status]}
+            (async/<! (haslett/connect url final-opts))
+            mult       (async/mult source)]
         (async/go
           (when-some [closed (async/<! close-status)]
             (rf/dispatch [::disconnected socket-id closed])))
         (when-not (async/poll! close-status)
           (let [sink-proxy (async/chan)]
             (async/go-loop []
-              (when-some [{:keys [id proto data close timeout]
-                           :or   {timeout 10000}}
-                          (async/<! sink-proxy)]
+              (when-some [{:keys [id proto data close timeout] :or {timeout 10000}} (async/<! sink-proxy)]
                 (cond
                   (#{:request} proto)
                   (let [xform         (filter (fn [msg] (= (:id msg) id)))
@@ -197,14 +199,16 @@
                         ([event] (rf/dispatch [::request-failed socket-id id :timeout]))
                         response-chan
                         ([event] (rf/dispatch [::request-success socket-id id (:data event)])))))
-                  (#{:subscription proto})
+                  (#{:subscription} proto)
                   (let [xform         (filter (fn [msg] (= (:id msg) id)))
                         response-chan (async/tap mult (async/chan 1 xform))]
                     (async/go-loop []
                       (when-some [msg (async/<! response-chan)]
                         (rf/dispatch [::subscription-message socket-id id (:data msg)])
                         (recur)))))
-                (when (async/>! sink {:id id :proto proto :data data :close close})
+                (when (if (some? close)
+                        (async/>! sink {:id id :proto proto :data data :close close})
+                        (async/>! sink {:id id :proto proto :data data}))
                   (recur))))
             (swap! CONNECTIONS assoc socket-id {:sink sink-proxy :source source :socket socket}))
           (rf/dispatch [::connected socket-id]))))))
@@ -218,8 +222,9 @@
 (rf/reg-fx
   ::ws-message
   (fn [{:keys [socket-id message]}]
-    (when-some [{:keys [sink]} (get @CONNECTIONS socket-id)]
-      (async/put! sink message))))
+    (if-some [{:keys [sink]} (get @CONNECTIONS socket-id)]
+      (async/put! sink message)
+      (.error js/console "Socket with id " socket-id " does not exist."))))
 
 
 ;;; INTROSPECTION
@@ -237,4 +242,4 @@
 (rf/reg-sub
   ::status
   (fn [db [_ socket-id]]
-    (get-in db [::sockets socket-id] :status)))
+    (get-in db [::sockets socket-id :status])))
