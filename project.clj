@@ -1,16 +1,18 @@
-(defproject org.clojars.rutledgepaulv/re-frame-websocket-fx "0.1.0-SNAPSHOT"
+(defproject org.clojars.rutledgepaulv/websocket-fx "0.1.0-SNAPSHOT"
 
   :dependencies
   [[org.clojure/clojure "1.10.0"]
    [org.clojure/clojurescript "1.10.520"]
-   [haslett "0.1.2"]
+   [haslett "0.1.4"]
+   [org.clojure/core.async "0.4.490"]
+   [com.cognitect/transit-cljs "0.8.256"]
    [re-frame "0.10.6"]]
 
   :source-paths
   ["src"]
 
   :repl-options
-  {:init-ns re-frame-websocket-fx.core}
+  {:init-ns websocket-fx.core}
 
   :cljsbuild
   {:builds

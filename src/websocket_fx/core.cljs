@@ -1,4 +1,4 @@
-(ns re-frame-websocket-fx.websocket-fx
+(ns websocket-fx.core
   (:require [re-frame.core :as rf]
             [clojure.string :as strings]
             [haslett.format :as formats]
