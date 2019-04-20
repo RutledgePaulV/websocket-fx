@@ -35,6 +35,9 @@
       m)
     (dissoc m k)))
 
+(defn concatv [& more]
+  (vec (apply concat more)))
+
 (def keyword->format
   {:edn                  formats/edn
    :json                 formats/json
@@ -44,133 +47,108 @@
 
 ;;; SOCKETS
 
-(rf/reg-event-fx
-  ::connect
+(rf/reg-event-fx ::connect
   (fn [{:keys [db]} [_ socket-id command]]
-    (let [data {:id      socket-id
-                :status  :pending
-                :options command}]
+    (let [data {:status :pending :options command}]
       {:db       (assoc-in db [::sockets socket-id] data)
        ::connect {:socket-id socket-id :options command}})))
 
-(rf/reg-event-fx
-  ::disconnect
+(rf/reg-event-fx ::disconnect
   (fn [{:keys [db]} [_ socket-id]]
     {:db          (dissoc-in db [::sockets socket-id])
      ::disconnect {:socket-id socket-id}}))
 
-(rf/reg-event-fx
-  ::connected
+(rf/reg-event-fx ::connected
   (fn [{:keys [db]} [_ socket-id]]
     {:db
      (assoc-in db [::sockets socket-id :status] :connected)
      :dispatch-n
-     (for [sub (vals (get-in db [::sockets socket-id :subscriptions] {}))]
-       [::subscribe (get sub :id) (get sub :data)])}))
+     (vec (for [sub (vals (get-in db [::sockets socket-id :subscriptions] {}))]
+            [::subscribe socket-id (get sub :id) sub]))}))
 
-(rf/reg-event-fx
-  ::disconnected
+(rf/reg-event-fx ::disconnected
   (fn [{:keys [db]} [_ socket-id cause]]
     (let [options (get-in db [::sockets socket-id :options])]
       {:db
        (assoc-in db [::sockets socket-id :status] :disconnected)
        :dispatch-n
-       (for [request-id (keys (get-in db [::sockets socket-id :requests] {}))]
-         [::request-failed socket-id request-id cause])
+       (vec (for [request-id (keys (get-in db [::sockets socket-id :requests] {}))]
+              [::request-failed socket-id request-id cause]))
        :dispatch-later
        [{:ms 2000 :dispatch [::connect socket-id options]}]})))
 
 ;;; REQUESTS
 
-(rf/reg-event-fx
-  ::request
-  (fn [{:keys [db]} [_ socket-id {:keys [message timeout on-success on-failure]}]]
-    (let [payload {:id (random-uuid) :proto :request :data message}
+(rf/reg-event-fx ::request
+  (fn [{:keys [db]} [_ socket-id {:keys [message timeout] :as command}]]
+    (let [payload {:id (random-uuid) :proto :request :data message :timeout timeout}
           path    [::sockets socket-id :requests (get payload :id)]]
-      {:db         (assoc-in db path {:message message :timeout timeout :on-success on-success :on-failure on-failure})
-       :ws-message {:socket-id socket-id
-                    :message   (assoc payload :timeout timeout)}})))
+      {:db         (assoc-in db path command)
+       :ws-message {:socket-id socket-id :message payload}})))
 
-(rf/reg-event-fx
-  ::request-success
+(rf/reg-event-fx ::request-success
   (fn [{:keys [db]} [_ socket-id request-id & more]]
-    (let [path [::sockets socket-id :requests request-id]]
-      (if-some [request (get-in db path)]
-        {:db       (dissoc-in db path)
-         :dispatch (vec (concat (:on-success request) more))}
-        {}))))
+    (let [path    [::sockets socket-id :requests request-id]
+          request (get-in db path)]
+      (cond-> {:db (dissoc-in db path)}
+        (contains? request :on-success)
+        (assoc :dispatch (concatv (:on-success request) more))))))
 
-(rf/reg-event-fx
-  ::request-failed
+(rf/reg-event-fx ::request-failed
   (fn [{:keys [db]} [_ socket-id request-id & more]]
-    (let [path [::sockets socket-id :requests request-id]]
-      (if-some [request (get-in db path)]
-        (cond->
-          {:db (dissoc-in db path)}
-          (contains? request :on-failure)
-          (assoc :dispatch (vec (concat (get request :on-failure) more))))))))
+    (let [path    [::sockets socket-id :requests request-id]
+          request (get-in db path)]
+      (cond-> {:db (dissoc-in db path)}
+        (contains? request :on-failure)
+        (assoc :dispatch (concatv (:on-failure request) more))))))
 
 
 ;;; SUBSCRIPTIONS
 
-(rf/reg-event-fx
-  ::subscribe
+(rf/reg-event-fx ::subscribe
   (fn [{:keys [db]} [_ socket-id topic {:keys [message] :as command}]]
-    (let [path [::sockets socket-id :subscriptions topic]]
+    (let [path    [::sockets socket-id :subscriptions topic]
+          payload {:id topic :proto :subscription :data message}]
       {:db          (assoc-in db path command)
-       ::ws-message {:socket-id socket-id
-                     :message   {:id    topic
-                                 :proto :subscription
-                                 :data  message}}})))
+       ::ws-message {:socket-id socket-id :message payload}})))
 
-(rf/reg-event-fx
-  ::subscription-message
-  (fn [{:keys [db]} [_ socket-id subscription-id response]]
+(rf/reg-event-fx ::subscription-message
+  (fn [{:keys [db]} [_ socket-id subscription-id & more]]
+    (let [path         [::sockets socket-id :subscriptions subscription-id]
+          subscription (get-in db path)]
+      (cond-> {}
+        (contains? subscription :on-message)
+        (assoc :dispatch (concatv (:on-message subscription) more))))))
+
+(rf/reg-event-fx ::cancel-subscription
+  (fn [{:keys [db]} [_ socket-id subscription-id & more]]
+    (let [path         [::sockets socket-id :subscriptions subscription-id]
+          payload      {:id subscription-id :proto :subscription :close true}
+          subscription (get-in db path)]
+      (cond-> {:db (dissoc-in db path)}
+        (some? subscription)
+        (assoc ::ws-message {:socket-id socket-id :message payload})
+        (contains? subscription :on-close)
+        (assoc :dispatch (concatv (:on-close subscription) more))))))
+
+(rf/reg-event-fx ::subscription-canceled
+  (fn [{:keys [db]} [_ socket-id subscription-id & more]]
     (let [path [::sockets socket-id :subscriptions subscription-id]]
       (if-some [subscription (get-in db path)]
-        (if-some [on-message (:on-message subscription)]
-          {:dispatch (conj on-message response)}
-          {})
-        {}))))
-
-(rf/reg-event-fx
-  ::cancel-subscription
-  (fn [{:keys [db]} [_ socket-id subscription-id & more]]
-    (let [path [::sockets socket-id :subscriptions subscription-id]]
-      (if-some [request (get-in db path)]
-        (cond->
-          {:db          (dissoc-in db path)
-           ::ws-message {:socket-id socket-id
-                         :message   {:id    subscription-id
-                                     :proto :subscription
-                                     :close true}}}
-          (contains? request :on-close)
-          (assoc :dispatch (vec (concat (get request :on-close) more))))))))
-
-(rf/reg-event-fx
-  ::subscription-canceled
-  (fn [{:keys [db]} [_ socket-id subscription-id & more]]
-    (let [path [::sockets socket-id :subscriptions subscription-id]]
-      (if-some [request (get-in db path)]
-        (cond->
-          {:db (dissoc-in db path)}
-          (contains? request :on-close)
-          (assoc :dispatch (vec (concat (get request :on-close) more))))))))
+        (cond-> {:db (dissoc-in db path)}
+          (contains? subscription :on-close)
+          (assoc :dispatch (concatv (:on-close subscription) more)))))))
 
 
 ;;; PUSH
 
-(rf/reg-event-fx
-  ::push
+(rf/reg-event-fx ::push
   (fn [_ [_ socket-id command]]
-    {::ws-message
-     {:socket-id
-      socket-id
-      :message
-      {:id    (random-uuid)
-       :proto :push
-       :data  command}}}))
+    (let [payload {:id (random-uuid) :proto :push :data command}]
+      {::ws-message {:socket-id socket-id :message payload}})))
 
+
+;;; FX HANDLERS
 
 (rf/reg-fx
   ::connect
@@ -180,17 +158,18 @@
          :or   {format :edn
                 url    (websocket-url)}}
         :options}]
-    (async/go
-      (let [{:keys [socket source sink close-status]}
-            (async/<! (haslett/connect url {:format (keyword->format format)}))
-            mult (async/mult source)]
-        (async/go
-          (when-some [closed (async/<! close-status)]
-            (rf/dispatch [::disconnected socket-id closed])
-            (when (some? on-disconnect)
-              (rf/dispatch on-disconnect))))
-        (when-not (async/poll! close-status)
-          (let [sink-proxy (async/chan)]
+    (let [sink-proxy (async/chan 100)]
+      (swap! CONNECTIONS assoc socket-id {:sink sink-proxy})
+      (async/go
+        (let [{:keys [socket source sink close-status]}
+              (async/<! (haslett/connect url {:format (keyword->format format)}))
+              mult (async/mult source)]
+          (swap! CONNECTIONS assoc socket-id {:sink sink-proxy :source source :socket socket})
+          (async/go
+            (when-some [closed (async/<! close-status)]
+              (rf/dispatch [::disconnected socket-id closed])
+              (when (some? on-disconnect) (rf/dispatch on-disconnect))))
+          (when-not (async/poll! close-status)
             (async/go-loop []
               (when-some [{:keys [id proto data close timeout] :or {timeout 10000}} (async/<! sink-proxy)]
                 (cond
@@ -211,19 +190,18 @@
                         (rf/dispatch [::subscription-message socket-id id (:data msg)])
                         (recur)))))
                 (when (if (some? close)
-                        (async/>! sink {:id id :proto proto :data data :close close})
+                        (async/>! sink {:id id :proto proto :close close})
                         (async/>! sink {:id id :proto proto :data data}))
                   (recur))))
-            (swap! CONNECTIONS assoc socket-id {:sink sink-proxy :source source :socket socket}))
-          (rf/dispatch [::connected socket-id])
-          (when (some? on-connect)
-            (rf/dispatch on-connect)))))))
+            (rf/dispatch [::connected socket-id])
+            (when (some? on-connect) (rf/dispatch on-connect))))))))
 
 (rf/reg-fx
   ::disconnect
   (fn [{:keys [socket-id]}]
-    (when-some [{:keys [socket]} (get @CONNECTIONS socket-id)]
-      (.close socket))))
+    (let [{:keys [socket]} (get @CONNECTIONS socket-id)]
+      (when (some? socket)
+        (.close socket)))))
 
 (rf/reg-fx
   ::ws-message
@@ -241,7 +219,7 @@
     (vals (get-in db [::sockets socket-id :requests]))))
 
 (rf/reg-sub
-  ::pending-subscriptions
+  ::open-subscriptions
   (fn [db [_ socket-id]]
     (vals (get-in db [::sockets socket-id :subscriptions]))))
 
