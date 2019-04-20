@@ -70,7 +70,7 @@
   (fn [{:keys [db]} [_ socket-id cause]]
     (let [options (get-in db [::sockets socket-id :options])]
       {:db
-       (assoc-in db [::sockets socket-id :status] :disconnected)
+       (assoc-in db [::sockets socket-id :status] :reconnecting)
        :dispatch-n
        (vec (for [request-id (keys (get-in db [::sockets socket-id :requests] {}))]
               [::request-failed socket-id request-id cause]))
