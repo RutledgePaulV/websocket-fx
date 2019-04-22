@@ -1,5 +1,18 @@
 (defproject org.clojars.rutledgepaulv/websocket-fx "0.1.0-SNAPSHOT"
 
+  :description
+  "A re-frame counterpart for websocket-layer"
+
+  :url
+  "https://github.com/rutledgepaulv/websocket-fx"
+
+  :license
+  {:name "MIT" :url "http://opensource.org/licenses/MIT"}
+
+  :deploy-repositories
+  [["releases" :clojars]
+   ["snapshots" :clojars]]
+
   :dependencies
   [[org.clojure/clojure "1.10.0"]
    [org.clojure/clojurescript "1.10.520"]
