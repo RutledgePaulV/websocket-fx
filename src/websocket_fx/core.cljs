@@ -120,7 +120,7 @@
         (contains? subscription :on-message)
         (assoc :dispatch (concatv (:on-message subscription) more))))))
 
-(rf/reg-event-fx ::cancel-subscription
+(rf/reg-event-fx ::unsubscribe
   (fn [{:keys [db]} [_ socket-id subscription-id & more]]
     (let [path         [::sockets socket-id :subscriptions subscription-id]
           payload      {:id subscription-id :proto :subscription :close true}
@@ -131,7 +131,7 @@
         (contains? subscription :on-close)
         (assoc :dispatch (concatv (:on-close subscription) more))))))
 
-(rf/reg-event-fx ::subscription-canceled
+(rf/reg-event-fx ::subscription-closed
   (fn [{:keys [db]} [_ socket-id subscription-id & more]]
     (let [path [::sockets socket-id :subscriptions subscription-id]]
       (if-some [subscription (get-in db path)]
@@ -186,9 +186,12 @@
                   (let [xform         (filter (fn [msg] (= (:id msg) id)))
                         response-chan (async/tap mult (async/chan 1 xform))]
                     (async/go-loop []
-                      (when-some [msg (async/<! response-chan)]
-                        (rf/dispatch [::subscription-message socket-id id (:data msg)])
-                        (recur)))))
+                      (when-some [{:keys [data close]} (async/<! response-chan)]
+                        (if (true? close)
+                          (do (async/close! response-chan)
+                              (rf/dispatch [::subscription-closed socket-id id]))
+                          (do (rf/dispatch [::subscription-message socket-id id data])
+                              (recur)))))))
                 (when (if (some? close)
                         (async/>! sink {:id id :proto proto :close close})
                         (async/>! sink {:id id :proto proto :data data}))
@@ -199,9 +202,8 @@
 (rf/reg-fx
   ::disconnect
   (fn [{:keys [socket-id]}]
-    (let [{:keys [socket]} (get @CONNECTIONS socket-id)]
-      (when (some? socket)
-        (.close socket)))))
+    (let [{:keys [socket]} (get (first (swap-vals! CONNECTIONS dissoc socket-id)) socket-id)]
+      (when (some? socket) (.close socket)))))
 
 (rf/reg-fx
   ::ws-message
