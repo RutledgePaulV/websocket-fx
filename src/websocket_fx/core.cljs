@@ -81,10 +81,11 @@
 
 (rf/reg-event-fx ::request
   (fn [{:keys [db]} [_ socket-id {:keys [message timeout] :as command}]]
-    (let [payload {:id (random-uuid) :proto :request :data message :timeout timeout}
+    (let [payload (cond-> {:id (random-uuid) :proto :request :data message}
+                    (some? timeout) (assoc :timeout timeout))
           path    [::sockets socket-id :requests (get payload :id)]]
       {:db         (assoc-in db path command)
-       :ws-message {:socket-id socket-id :message payload}})))
+       ::ws-message {:socket-id socket-id :message payload}})))
 
 (rf/reg-event-fx ::request-success
   (fn [{:keys [db]} [_ socket-id request-id & more]]
