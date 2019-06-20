@@ -64,10 +64,10 @@ to be idempotent and are not retried in the event of a disconnect.
   {; required. the actual message to the server
    :message    {:kind :get-users} 
    ; optional. the event to dispatch with the reply when received
-   :on-success [::got-users]
+   :on-response [::got-users]
    ; optional. the event to dispatch if no reply is received 
    ; within the allotted time after the request was sent
-   :on-failure [::failed-get-users]
+   :on-timeout [::failed-get-users]
    ; optional. defaults to 10000. the amount of time to wait for a reply
    ; to a request before considering the request as failed.
    :timeout    5000})

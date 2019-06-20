@@ -73,7 +73,7 @@
        (assoc-in db [::sockets socket-id :status] :reconnecting)
        :dispatch-n
        (vec (for [request-id (keys (get-in db [::sockets socket-id :requests] {}))]
-              [::request-failed socket-id request-id cause]))
+              [::request-timeout socket-id request-id cause]))
        :dispatch-later
        [{:ms 2000 :dispatch [::connect socket-id options]}]})))
 
@@ -87,21 +87,21 @@
       {:db         (assoc-in db path command)
        ::ws-message {:socket-id socket-id :message payload}})))
 
-(rf/reg-event-fx ::request-success
+(rf/reg-event-fx ::request-response
   (fn [{:keys [db]} [_ socket-id request-id & more]]
     (let [path    [::sockets socket-id :requests request-id]
           request (get-in db path)]
       (cond-> {:db (dissoc-in db path)}
-        (contains? request :on-success)
-        (assoc :dispatch (concatv (:on-success request) more))))))
+        (contains? request :on-response)
+        (assoc :dispatch (concatv (:on-response request) more))))))
 
-(rf/reg-event-fx ::request-failed
+(rf/reg-event-fx ::request-timeout
   (fn [{:keys [db]} [_ socket-id request-id & more]]
     (let [path    [::sockets socket-id :requests request-id]
           request (get-in db path)]
       (cond-> {:db (dissoc-in db path)}
-        (contains? request :on-failure)
-        (assoc :dispatch (concatv (:on-failure request) more))))))
+        (contains? request :on-timeout)
+        (assoc :dispatch (concatv (:on-timeout request) more))))))
 
 
 ;;; SUBSCRIPTIONS
@@ -181,8 +181,8 @@
                     (async/go
                       (let [[value _] (async/alts! [timeout-chan response-chan])]
                         (if (some? value)
-                          (rf/dispatch [::request-success socket-id id (:data value)])
-                          (rf/dispatch [::request-failed socket-id id :timeout])))))
+                          (rf/dispatch [::request-response socket-id id (:data value)])
+                          (rf/dispatch [::request-timeout socket-id id :timeout])))))
                   (#{:subscription} proto)
                   (let [xform         (filter (fn [msg] (= (:id msg) id)))
                         response-chan (async/tap mult (async/chan 1 xform))]

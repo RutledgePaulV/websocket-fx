@@ -16,8 +16,8 @@
   :dependencies
   [[org.clojure/clojure "1.10.0"]
    [org.clojure/clojurescript "1.10.520"]
-   [haslett "0.1.4"]
-   [org.clojure/core.async "0.4.490"]
+   [haslett "0.1.6"]
+   [org.clojure/core.async "0.4.500"]
    [com.cognitect/transit-cljs "0.8.256"]
    [re-frame "0.10.6"]]
 
