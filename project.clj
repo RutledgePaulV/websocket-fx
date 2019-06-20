@@ -1,4 +1,4 @@
-(defproject org.clojars.rutledgepaulv/websocket-fx "0.1.2"
+(defproject org.clojars.rutledgepaulv/websocket-fx "0.1.3-SNAPSHOT"
 
   :description
   "A re-frame counterpart for websocket-layer"
