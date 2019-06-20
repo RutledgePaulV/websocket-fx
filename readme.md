@@ -8,7 +8,7 @@ subscriptions, and pushes over an individual socket.
 ### Install
 
 ```clojure
-[org.clojars.rutledgepaulv/websocket-fx "0.1.0"]
+[org.clojars.rutledgepaulv/websocket-fx "0.1.2"]
 ```
 
 ### Connecting
