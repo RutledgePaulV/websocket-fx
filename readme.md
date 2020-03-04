@@ -32,7 +32,7 @@ require an opaque id to identify the socket you want to interact with.
    :on-disconnect [::websocket-disconnected]})
 
 ; start the connection process (will happen sometime later)
-(rf/dispatch [::wfx/connect socket-id])
+(rf/dispatch [::wfx/connect socket-id options])
 
 ; cleanup / disconnect that particular socket
 (rf/dispatch [::wfx/disconnect socket-id])
